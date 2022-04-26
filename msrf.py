@@ -77,13 +77,13 @@ class DSDF(nn.Module):
         nn.LeakyReLU(negative_slope = 0.25))
 
         #TO DO
-        self.ny1t = nn.Sequential(nn.ConvTranspose2d(in_ch_y, gc, kernel_size = (4,4), stride = (2, 2), padding = (1,1), bias = True),
+        self.ny1t = nn.Sequential(nn.ConvTranspose2d(in_ch_y, gc, kernel_size = (4,4), stride = (2, 2), padding = (1,1), bias = bias),
         nn.LeakyReLU(negative_slope = 0.25))
 
         self.nx2 = nn.Sequential(nn.Conv2d(in_ch_x + gc + gc, gc, kernel_size = (3,3), stride = (1,1), padding = (1,1),bias = bias),
         nn.LeakyReLU(negative_slope = 0.25))
 
-        self.ny2 = nn.Sequential(nn.Conv2d(in_ch_x + gc + gc, gc, kernel_size = (3,3), stride = (1,1), padding = (1,1),bias = bias),
+        self.ny2 = nn.Sequential(nn.Conv2d(in_ch_y + gc + gc, gc, kernel_size = (3,3), stride = (1,1), padding = (1,1),bias = bias),
         nn.LeakyReLU(negative_slope = 0.25))
 
         #TO DO
@@ -122,10 +122,10 @@ class DSDF(nn.Module):
         self.ny4t = nn.Sequential(nn.ConvTranspose2d(gc, gc, kernel_size = (4,4), stride = (2,2), padding = (1,1), bias = bias),
         nn.LeakyReLU(negative_slope = 0.25))
 
-        self.nx5 = nn.Sequential(nn.Conv2d(in_ch_x + gc + gc + gc + gc + gc, kernel_size = (3,3), stride = (1,1), padding = (1,1), bias = bias),
+        self.nx5 = nn.Sequential(nn.Conv2d(in_ch_x + gc + gc + gc + gc + gc, nf1, kernel_size = (3,3), stride = (1,1), padding = (1,1), bias = bias),
         nn.LeakyReLU(negative_slope = 0.25))
 
-        self.ny5 = nn.Sequential(nn.Conv2d(in_ch_y + gc + gc + gc + gc + gc, kernel_size = (3,3), stride = (1,1), padding = (1,1), bias = bias),
+        self.ny5 = nn.Sequential(nn.Conv2d(in_ch_y + gc + gc + gc + gc + gc, nf2, kernel_size = (3,3), stride = (1,1), padding = (1,1), bias = bias),
         nn.LeakyReLU(negative_slope = 0.25))
 
 
@@ -172,13 +172,52 @@ class DSDF(nn.Module):
         x5 *= 0.4
         y5 *= 0.4
 
-        return x5 + x, y5 + y 
+        return x5 + x, y5 + y
 
-# class MSRF(nn.Module):
-#     def __init__(self):
-#         super().__init__()
+class MSRF_SubNet(nn.Module):
+    def __init__(self, init_feat):
+        super().__init__() 
+        self.dsfs_1  = DSDF(init_feat, init_feat*2, nf1=init_feat, nf2=init_feat*2, gc=init_feat//2)
+        self.dsfs_2  = DSDF(init_feat*4, init_feat*8, nf1=init_feat*4, nf2=init_feat*8, gc=init_feat*4//2)
+        self.dsfs_3  = DSDF(init_feat, init_feat*2, nf1=init_feat, nf2=init_feat*2, gc=init_feat//2)
+        self.dsfs_4  = DSDF(init_feat*4, init_feat*8, nf1=init_feat*4, nf2=init_feat*8, gc=init_feat*4//2)
+        self.dsfs_5  = DSDF(init_feat*2, init_feat*4, nf1=init_feat*2, nf2=init_feat*4, gc=init_feat*2//2)
+        self.dsfs_6  = DSDF(init_feat, init_feat*2, nf1=init_feat, nf2=init_feat*2, gc=init_feat//2)
+        self.dsfs_7  = DSDF(init_feat*4, init_feat*8, nf1=init_feat*4, nf2=init_feat*8, gc=init_feat*4//2)
+        self.dsfs_8  = DSDF(init_feat*2, init_feat*4, nf1=init_feat*2, nf2=init_feat*4, gc=init_feat*2//2)
+        self.dsfs_9  = DSDF(init_feat, init_feat*2, nf1=init_feat, nf2=init_feat*2, gc=init_feat//2)
+        self.dsfs_10 = DSDF(init_feat*4, init_feat*8, nf1=init_feat*4, nf2=init_feat*8, gc=init_feat*4//2)
 
-#     def forward(self, x):
+    def forward(self, x11, x21, x31, x41):
+        x12, x22 = self.dsfs_1(x11, x21)
+        x32, x42 = self.dsfs_2(x31, x41)
+        x12, x22 = self.dsfs_3(x12, x22)
+        x32, x42 = self.dsfs_4(x32, x42)
+        x22, x32 = self.dsfs_5(x22, x32)
+        x13, x23 = self.dsfs_6(x12, x22)
+        x33, x43 = self.dsfs_7(x32, x42)
+        x23, x33 = self.dsfs_8(x23, x33)
+        x13, x23 = self.dsfs_9(x13, x23)
+        x33, x43 = self.dsfs_10(x33, x43)
+
+        x13 = (x13*0.4) + x11
+        x23 = (x23*0.4) + x21
+        x33 = (x33*0.4) + x31
+        x43 = (x43*0.4) + x41
+
+        return x13, x23, x33, x43
+
+
+class MSRF(nn.Module):
+    def __init__(self, in_ch, n_classes, init_feat = 32):
+        super().__init__()
+        self.encoder1 = Encoder(in_ch, init_feat)
+        self.msrf_subnet = MSRF_SubNet(init_feat)
+
+    def forward(self, x):
+        e1, e2, e3, e4 = self.encoder1(x)
+        msrf_subnet_op = self.msrf_subnet(e1, e2, e3, e4)
+        return msrf_subnet_op
 
 """
 Function to test Encoder 1
@@ -189,7 +228,14 @@ def test_encoder1():
     #testing shape of final encoder output
     print(encoder(x)[3].shape)
 
-
+"""
+Function to test MSRF-NET 
+"""
+def test_msrf():
+    with torch.no_grad():
+        x = torch.randn((2,1,256,256))
+        msrf = MSRF(1, 3, init_feat = 32)
+        print(msrf(x)[0].shape)
 
 if __name__ == "__main__":
-    test_encoder1()
+    test_msrf()
