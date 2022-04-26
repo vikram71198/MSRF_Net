@@ -173,7 +173,9 @@ class DSDF(nn.Module):
         y5 *= 0.4
 
         return x5 + x, y5 + y
-
+"""
+MSRF Sub-Network implementing Multi-Scale Fusion using DSDF Blocks
+"""
 class MSRF_SubNet(nn.Module):
     def __init__(self, init_feat):
         super().__init__() 
