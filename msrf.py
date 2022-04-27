@@ -263,18 +263,154 @@ class ShapeStream(nn.Module):
         feat = torch.sigmoid(self.fuse(torch.cat((gate, grad), dim=1)))
         return gate, feat
 
+class AttentionBlock(nn.Module):
+    def __init__(self, in_ch_x, in_ch_g, med_ch):
+        super().__init__()
+        self.theta = nn.Conv2d(in_ch_x, med_ch, kernel_size=(2, 2), stride=(2, 2), padding=(0, 0), bias=True)
+        self.phi = nn.Conv2d(in_ch_g, med_ch, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), bias=True)
+        self.block = nn.Sequential(nn.ReLU(), nn.Conv2d(med_ch, 1, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), bias=True),
+                                   nn.Sigmoid(), nn.ConvTranspose2d(1, 1, kernel_size=(2, 2), stride=(2, 2), padding=(0, 0), bias=True))
+        self.batchnorm = nn.BatchNorm2d(in_ch_x)
+
+    def forward(self, x, g):
+        theta = self.theta(x) + self.phi(g)
+        out = self.batchnorm(self.block(theta) * x)
+        return out
+
+class UpBlock(nn.Module):
+    def __init__(self, inp1_ch, inp2_ch):
+        super().__init__()
+        self.up = nn.ConvTranspose2d(inp2_ch, inp1_ch, kernel_size=(2, 2), stride=(2, 2), padding=(0, 0), bias=True)
+    
+    def forward(self, input_1, input_2):
+        x = torch.cat([self.up(input_2), input_1], dim=1)
+        return x
+
+class SpatialATTBlock(nn.Module):
+    def __init__(self, in_ch, med_ch):
+        super().__init__()
+        self.block = nn.Sequential(nn.Conv2d(in_ch, med_ch, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), bias=True),
+                                   nn.BatchNorm2d(med_ch),
+                                   nn.ReLU(),
+                                   nn.Conv2d(med_ch, 1, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0), bias=True),
+                                   nn.Sigmoid())
+    def forward(self, x):
+        x = self.block(x)
+        return x
+
+class DualATTBlock(nn.Module):
+    def __init__(self, skip_in_ch, prev_in_ch, out_ch):
+        super().__init__()
+        self.prev_block = nn.Sequential(nn.ConvTranspose2d(prev_in_ch, out_ch, kernel_size=(2, 2), stride=(2, 2), padding=(0, 0), bias=True),
+                                        nn.BatchNorm2d(out_ch),
+                                        nn.ReLU())
+        self.block = nn.Sequential(nn.Conv2d(skip_in_ch+out_ch, out_ch, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=True),
+                                   nn.BatchNorm2d(out_ch),
+                                   nn.ReLU())
+        self.se_block = SE_Block(out_ch, ratio=16)
+        self.spatial_att = SpatialATTBlock(out_ch, out_ch)
+    
+    def forward(self, skip, prev):
+        prev = self.prev_block(prev)
+        x = torch.cat([skip, prev], dim=1)
+        inpt_layer = self.block(x)
+        se_out = self.se_block(inpt_layer)
+        sab = self.spatial_att(inpt_layer) + 1
+
+        return sab * se_out
+
+class Decoder(nn.Module):
+    def __init__(self, init_feat, n_classes):
+        super().__init__()
+        # Stage 1
+        self.att_1 = AttentionBlock(init_feat*4, init_feat*8, init_feat*8)
+        self.up_1 = UpBlock(init_feat*4, init_feat*8)
+        self.dualatt_1 = DualATTBlock(init_feat*4, init_feat*8, init_feat*4)
+        self.n34_t = nn.Conv2d(init_feat * 4 + init_feat * 8, init_feat * 4, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0))
+        self.dec_block_1 = nn.Sequential(nn.BatchNorm2d(init_feat*4),
+                                         nn.ReLU(),
+                                         nn.Conv2d(init_feat*4, init_feat*4, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
+                                         nn.BatchNorm2d(init_feat*4),
+                                         nn.ReLU(),
+                                         nn.Conv2d(init_feat*4, init_feat*4, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                                         )
+        self.head_dec_1 = nn.Sequential(nn.Conv2d(init_feat*4, n_classes, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0)),
+                                        #nn.Sigmoid(), #TODO : Inform spanish guy!
+                                        nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True))
+
+        # Stage 2
+        self.att_2 = AttentionBlock(init_feat * 2, init_feat * 4, init_feat * 2)
+        self.up_2 = UpBlock(init_feat * 2, init_feat * 4)
+        self.dualatt_2 = DualATTBlock(init_feat * 2, init_feat * 4, init_feat * 2)
+        self.n24_t = nn.Conv2d(init_feat * 2 + init_feat * 4, init_feat * 2, kernel_size=(1, 1), stride=(1, 1), padding=(0,0))
+        self.dec_block_2 = nn.Sequential(nn.BatchNorm2d(init_feat * 2),
+                                         nn.ReLU(),
+                                         nn.Conv2d(init_feat * 2, init_feat * 2, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
+                                         nn.BatchNorm2d(init_feat * 2),
+                                         nn.ReLU(),
+                                         nn.Conv2d(init_feat*2, init_feat * 2, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+                                         )
+        self.head_dec_2 = nn.Sequential(nn.Conv2d(init_feat * 2, n_classes, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0)),
+                                        #nn.Sigmoid(), #TODO : Inform spanish guy!
+                                        nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True))
+
+        # Stage 3
+        self.up_3 = nn.ConvTranspose2d(init_feat * 2, init_feat, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+        self.n14_input = nn.Sequential(nn.Conv2d(init_feat + init_feat + 1, init_feat, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0)),
+                                       nn.ReLU()) #TODO : This ain't in the paper!
+        self.dec_block_3 = nn.Sequential(nn.Conv2d(init_feat, init_feat, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)), #TODO : Missing 1x1 Conv, ReLu before this
+                                         nn.ReLU(),
+                                         nn.BatchNorm2d(init_feat))
+
+        self.head_dec_3 = nn.Sequential(nn.Conv2d(init_feat, init_feat, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
+                                        nn.ReLU(),
+                                        nn.Conv2d(init_feat, n_classes, kernel_size=(1, 1), stride=(1, 1), padding=(0, 0)))
+                                        #nn.Sigmoid()) #TODO : Inform spanish guy!
+        
+    def forward(self, x13, x33, x43, x23, canny_feat):
+
+        # Stage 1
+        x34_preinput = self.att_1(x33, x43)
+        x34 = self.up_1(x34_preinput, x43)
+        x34_t = self.dualatt_1(x33, x43)
+        x34_t = torch.cat([x34, x34_t], dim=1)
+        x34_t = self.n34_t(x34_t)
+        x34 = self.dec_block_1(x34_t) + x34_t
+        pred_1 = self.head_dec_1(x34)
+
+        # Stage 2
+        x24_preinput = self.att_2(x23, x34)
+        x24 = self.up_2(x24_preinput, x34)
+        x24_t = self.dualatt_2(x23, x34)
+        x24_t = torch.cat([x24, x24_t], dim=1)
+        x24_t = self.n24_t(x24_t)
+        x24 = self.dec_block_2(x24_t) + x24_t
+        pred_2 = self.head_dec_2(x24)
+
+        # Stage 3
+        x14_preinput = self.up_3(x24)
+        x14_input = torch.cat([x14_preinput, x13, canny_feat], dim=1)
+        x14_input = self.n14_input(x14_input)
+        x14 = self.dec_block_3(x14_input)
+        x14 = x14 + x14_input
+        pred_3 = self.head_dec_3(x14)
+
+        return pred_1, pred_2, pred_3
+
 class MSRF(nn.Module):
     def __init__(self, in_ch, n_classes, init_feat = 32):
         super().__init__()
         self.encoder1 = Encoder(in_ch, init_feat)
         self.msrf_subnet = MSRF_SubNet(init_feat)
         self.shape_stream = ShapeStream(init_feat)
+        self.decoder = Decoder(init_feat, n_classes)
 
     def forward(self, x, canny):
         e1, e2, e3, e4 = self.encoder1(x)
         x13, x23, x33, x43 = self.msrf_subnet(e1, e2, e3, e4)
         canny_gate, canny_feat = self.shape_stream(x13, x23, x33, x43, canny)
-        return canny_gate, canny_feat
+        pred_1, pred_2, pred_3 = self.decoder(x13, x33, x43, x23, canny_feat)
+        return pred_1, pred_2, pred_3
 
 """
 Function to test Encoder 1
@@ -293,7 +429,9 @@ def test_msrf():
         x = torch.randn((2,1,256,256))
         canny = torch.randn((2,1,256,256))
         msrf = MSRF(1, 3, init_feat = 32)
-        print(msrf(x, canny)[0].shape)
+        output = msrf(x, canny)
+        for o in output:
+            print(o.shape)
 
 if __name__ == "__main__":
     test_msrf()
