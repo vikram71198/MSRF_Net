@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import torch.optim as optim
+from torchvision.models.resnet import BasicBlock
 
 """
 Squeeze & Excitation Block
@@ -209,17 +210,71 @@ class MSRF_SubNet(nn.Module):
 
         return x13, x23, x33, x43
 
+"""
+Gated Convolutions
+"""
+class GatedConv(nn.Conv2d):
+    def __init__(self, in_channels, out_channels):
+        super().__init__(in_channels, out_channels, 1, bias=False)
+        self.attention = nn.Sequential(
+            nn.BatchNorm2d(in_channels + 1),
+            nn.Conv2d(in_channels + 1, in_channels + 1, 1),
+            nn.ReLU(),
+            nn.Conv2d(in_channels + 1, 1, 1),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, feat, gate):
+        attention = self.attention(torch.cat((feat, gate), dim=1))
+        out = F.conv2d(feat * (attention + 1), self.weight)
+        return out
+"""
+Shape Stream
+"""
+class ShapeStream(nn.Module):
+    def __init__(self, init_feat):
+        super().__init__()
+        self.res2_conv = nn.Conv2d(init_feat * 2, 1, 1)
+        self.res3_conv = nn.Conv2d(init_feat * 4, 1, 1)
+        self.res4_conv = nn.Conv2d(init_feat * 8, 1, 1)
+        self.res1 = BasicBlock(init_feat, init_feat, 1)
+        self.res2 = BasicBlock(32, 32, 1)
+        self.res3 = BasicBlock(16, 16, 1)
+        self.res1_pre = nn.Conv2d(init_feat, 32, 1)
+        self.res2_pre = nn.Conv2d(32, 16, 1)
+        self.res3_pre = nn.Conv2d(16, 8, 1)
+        self.gate1 = GatedConv(32, 32)
+        self.gate2 = GatedConv(16, 16)
+        self.gate3 = GatedConv(8, 8)
+        self.gate = nn.Conv2d(8, 1, 1, bias=False)
+        self.fuse = nn.Conv2d(2, 1, 1, bias=False)
+    
+    def forward(self, x, res2, res3, res4, grad):
+        size = grad.shape[-2:]
+        x = F.interpolate(x, size, mode='bilinear', align_corners=True)
+        res2 = F.interpolate(self.res2_conv(res2), size, mode='bilinear', align_corners=True)
+        res3 = F.interpolate(self.res3_conv(res3), size, mode='bilinear', align_corners=True)
+        res4 = F.interpolate(self.res4_conv(res4), size, mode='bilinear', align_corners=True)
+        gate1 = self.gate1(self.res1_pre(self.res1(x)), res2)
+        gate2 = self.gate2(self.res2_pre(self.res2(gate1)), res3)
+        gate3 = self.gate3(self.res3_pre(self.res3(gate2)), res4)
+        gate = torch.sigmoid(self.gate(gate3))
+        feat = torch.sigmoid(self.fuse(torch.cat((gate, grad), dim=1)))
+        return gate, feat
 
 class MSRF(nn.Module):
     def __init__(self, in_ch, n_classes, init_feat = 32):
         super().__init__()
         self.encoder1 = Encoder(in_ch, init_feat)
         self.msrf_subnet = MSRF_SubNet(init_feat)
+        self.shape_stream = ShapeStream(init_feat)
 
-    def forward(self, x):
+    def forward(self, x, canny):
         e1, e2, e3, e4 = self.encoder1(x)
-        msrf_subnet_op = self.msrf_subnet(e1, e2, e3, e4)
-        return msrf_subnet_op
+        x13, x23, x33, x43 = self.msrf_subnet(e1, e2, e3, e4)
+        canny_gate, canny_feat = self.shape_stream(x13, x23, x33, x43, canny)
+        return canny_gate, canny_feat
 
 """
 Function to test Encoder 1
@@ -236,8 +291,9 @@ Function to test MSRF-NET
 def test_msrf():
     with torch.no_grad():
         x = torch.randn((2,1,256,256))
+        canny = torch.randn((2,1,256,256))
         msrf = MSRF(1, 3, init_feat = 32)
-        print(msrf(x)[0].shape)
+        print(msrf(x, canny)[0].shape)
 
 if __name__ == "__main__":
     test_msrf()
