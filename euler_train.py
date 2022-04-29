@@ -89,7 +89,7 @@ def train(train_loader_x, train_loader_y, batch_size, num_batches, num_epochs, l
 
             print('*************')
 
-        print(f"For epoch {epochs + 1}, MSRF Loss is {running_loss}")
+        print(f"For epoch {epochs + 1} MSRF loss is {running_loss}")
         if (epochs + 1) % 5 == 0:
             torch.save(msrf_net.state_dict(), f'msrf_cvc-clinic_{epochs+1}_{running_loss}.pt')
 
@@ -102,8 +102,8 @@ def train(train_loader_x, train_loader_y, batch_size, num_batches, num_epochs, l
 def main():
     ########## Hyperparameters ##############
     learning_rate = 1e-4
-    num_epochs = 50
-    batch_size = 3
+    num_epochs = 120
+    batch_size = 8
     #########################################
 
     # Change directory to /srv/home/kanbur/MSRF_Net

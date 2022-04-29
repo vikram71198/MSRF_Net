@@ -25,7 +25,7 @@ def read_img(path):
 
 def read_mask(path):
     mask = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-    thresh, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+    #thresh, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
     mask = mask/255.0
     mask = mask.astype(np.float32)
     #mask = np.expand_dims(mask, axis=-1)
