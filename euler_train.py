@@ -13,30 +13,48 @@ import glob
 from tqdm import tqdm as tqdm
 import pickle as pkl
 import os
+import random
 
 # Use GPU
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+torch.manual_seed(0)
+random.seed(0)
+model_file_prefix = 'msrf_cvc-clinicTWO'
 
-def generate_filenames():
-    img_list = [] #sorted(glob.glob("out/image/*"))
-    mask_list = [] #sorted(glob.glob("out/mask/*"))
+def generate_splits():
+    # Get all base images (no augmentations)
+    img_list = sorted(glob.glob("out/image/*_1.png"))
+    mask_list = sorted(glob.glob("out/mask/*_1.png"))
 
-    for i in range(1, 5):
-        img_list += sorted(glob.glob("out/image/*_" + str(i) + ".png"))
-        mask_list += sorted(glob.glob("out/mask/*_" + str(i) + ".png"))
+    img_data = list(zip(img_list,mask_list))
+    data_len = len(img_data)
+    train_set, val_set, test_set = torch.utils.data.random_split(img_data, [round(0.4*data_len), round(0.1*data_len), data_len - round(0.4*data_len) - round(0.1*data_len)])
 
-    return img_list, mask_list
-
-def load_split_sets():
-    print("Loading same train-val-test split as Double U-Net..")
-    with open("train_set.pkl", 'rb') as f:
-        train_set = pkl.load(f)
-    with open("val_set.pkl", 'rb') as f:
-        val_set = pkl.load(f)
-    with open("test_set.pkl", 'rb') as f:
-        test_set = pkl.load(f)
+    final_train_set = []
+    final_val_set = []
+    final_test_set = []
+    for img, mask in train_set:
+        img_prefix = img[:-5]
+        mask_prefix = mask[:-5]
+        final_train_set.append((img, mask))
+        for i in range(2, 9):
+            final_train_set.append((img_prefix + str(i) + ".png", mask_prefix + str(i) + ".png"))
     
-    return train_set, val_set, test_set
+    for img, mask in val_set:
+        img_prefix = img[:-5]
+        mask_prefix = mask[:-5]
+        final_val_set.append((img, mask))
+        for i in range(2, 9):
+            final_val_set.append((img_prefix + str(i) + ".png", mask_prefix + str(i) + ".png"))
+    
+    for img, mask in test_set:
+        img_prefix = img[:-5]
+        mask_prefix = mask[:-5]
+        final_test_set.append((img, mask))
+        for i in range(2, 9):
+            final_test_set.append((img_prefix + str(i) + ".png", mask_prefix + str(i) + ".png"))
+
+    return final_train_set, final_val_set, final_test_set
 
 def generate_batches(train_set, batch_size):
     #Divide Train Data Into List of Batches for Training Loop
@@ -91,10 +109,10 @@ def train(train_loader_x, train_loader_y, batch_size, num_batches, num_epochs, l
 
         print(f"For epoch {epochs + 1} MSRF loss is {running_loss}")
         if (epochs + 1) % 5 == 0:
-            torch.save(msrf_net.state_dict(), f'msrf_cvc-clinic_{epochs+1}_{running_loss}.pt')
+            torch.save(msrf_net.state_dict(), model_file_prefix + f'_{epochs+1}_{running_loss}.pt')
 
     # Save PyTorch model to disk
-    model_file = 'msrf_cvc-clinic.pt'
+    model_file = model_file_prefix + '.pt'
     torch.save(msrf_net.state_dict(), model_file)
     print('Finished training! Model saved to ' + model_file)
 
@@ -102,22 +120,20 @@ def train(train_loader_x, train_loader_y, batch_size, num_batches, num_epochs, l
 def main():
     ########## Hyperparameters ##############
     learning_rate = 1e-4
-    num_epochs = 120
+    num_epochs = 200
     batch_size = 8
     #########################################
 
     # Change directory to /srv/home/kanbur/MSRF_Net
     os.chdir('/srv/home/kanbur/MSRF_Net')
 
-    img_list, mask_list = generate_filenames()
-    img_data = list(zip(img_list,mask_list))
-
-    train_set, val_set, test_set = load_split_sets()
+    train_set, val_set, test_set = generate_splits()
     num_batches = math.ceil(len(train_set)/batch_size)
+    print(f'Train_set length = {len(train_set)}')
+    print(train_set)
 
     train_loader_x, train_loader_y = generate_batches(train_set, batch_size)
-
-    train(train_loader_x, train_loader_y, batch_size, num_batches, num_epochs, learning_rate)
+    #train(train_loader_x, train_loader_y, batch_size, num_batches, num_epochs, learning_rate)
 
 if __name__ == "__main__":
     main()
