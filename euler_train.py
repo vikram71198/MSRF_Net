@@ -133,7 +133,7 @@ def main():
     print(train_set)
 
     train_loader_x, train_loader_y = generate_batches(train_set, batch_size)
-    #train(train_loader_x, train_loader_y, batch_size, num_batches, num_epochs, learning_rate)
+    train(train_loader_x, train_loader_y, batch_size, num_batches, num_epochs, learning_rate)
 
 if __name__ == "__main__":
     main()
