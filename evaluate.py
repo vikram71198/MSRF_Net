@@ -57,8 +57,8 @@ def infer(input_filenames, number):
     y_truth = torch.from_numpy(euler_utils.read_mask(input_filenames[0][1]))
 
     mask_inference = y_3.detach().cpu().numpy()*(255)
-    cv2.imwrite(f'good_results_msrf/infer{number}.png', mask_inference)
-    shutil.copyfile(input_filenames[0][1], f'good_results_msrf/infer_exp{number}.png')
+    cv2.imwrite(f'good_results_msrf/infer_{number}_msrf.png', mask_inference)
+    shutil.copyfile(input_filenames[0][1], f'good_results_msrf/infer_exp_{number}.png')
 
     dice_loss = euler_metrics.dice_loss(y_truth, y_3)
 
@@ -97,7 +97,7 @@ os.chdir('/srv/home/kanbur/MSRF_Net')
 msrf_net = MSRF(in_ch = 3, n_classes = 2, init_feat = 32).eval().to(device)
 msrf_net.load_state_dict(torch.load("trained_models/msrf_cvc-clinic.pt",  map_location=torch.device('cpu')))
 
-indices = [0, 1200, 1203, 1216, 1235, 1248, 1272, 1275, 1368]
+indices = [0, 1200, 1203, 1216, 1235, 1248, 1272, 1275]
 
 train_set = []
 
