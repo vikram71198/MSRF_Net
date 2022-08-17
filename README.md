@@ -1,3 +1,5 @@
+# MSRF-Net for Medical Image Segmentation
+
 This was the second paper we implemented for our course project (CS 766 : Computer Vision) for Spring '22.
 
 You can find the paper [here](https://arxiv.org/pdf/2105.07451.pdf)
